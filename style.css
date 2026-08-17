@@ -58,11 +58,6 @@
   opacity: 0.9;
 }
 
-.uf-tabs-meta {
-  color: var(--app-text-muted, #94a3b8);
-  font-size: 0.78rem;
-}
-
 .uf-panes {
   flex: 1 1 auto;
   min-height: 0;

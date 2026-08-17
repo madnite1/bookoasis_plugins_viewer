@@ -9,7 +9,6 @@
   const tabsEl = $('tabs');
   const panesEl = $('panes');
   const statusEl = $('status');
-  const metaEl = $('tabs-meta');
 
   let plugins = [];
   let activeId = null;
@@ -135,7 +134,6 @@
     if (plugins.length === 0) {
       showStatus('이 보관함의 통합 뷰어에 표시할 플러그인이 없습니다. 설정 > 플러그인 > 통합 뷰어에서 선택하세요.', true);
     } else {
-      metaEl.textContent = `${plugins.length}개 뷰어 통합`;
       activate(plugins[0].id);
     }
   }
