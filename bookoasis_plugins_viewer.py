@@ -33,6 +33,28 @@ _SESSION_LABELS = {
 _ORIG_TABS = {}
 
 
+def _self_installed():
+    """플러그인 모아보기 자신이 아직 설치되어 있는지 확인 (삭제 시 자가 복구용)."""
+    import os
+    return os.path.isdir(os.path.dirname(os.path.abspath(__file__)))
+
+
+class _HiddenTab:
+    """개별 사이드바 탭 숨김용 자가 복구 디스크립터.
+
+    코어가 category_tab 을 읽을 때마다 플러그인 모아보기가 아직 설치되어
+    있는지 확인하고, 삭제되었으면 원본 탭을 반환한다 (숨김 자동 해제).
+    """
+
+    def __init__(self, orig_tab):
+        self._orig = orig_tab
+
+    def __get__(self, obj, objtype=None):
+        if not _self_installed():
+            return self._orig
+        return None
+
+
 def _tab_sessions(tab):
     raw = tab.get("sessions")
     if raw is None:
@@ -106,7 +128,7 @@ def _apply_session_overrides():
             currently_hidden = p_id in _ORIG_TABS
             if in_unified and not currently_hidden:
                 _ORIG_TABS[p_id] = getattr(cls, "category_tab", None)
-                cls.category_tab = None
+                cls.category_tab = _HiddenTab(_ORIG_TABS[p_id])
             elif not in_unified and currently_hidden:
                 cls.category_tab = _ORIG_TABS.pop(p_id)
         except Exception:
