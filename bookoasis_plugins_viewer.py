@@ -99,6 +99,15 @@ def _discover_viewer_classes():
             if p_id == SELF_ID or p_id in seen:
                 continue
             seen.add(p_id)
+            # 재설치 대응: 이전 모듈 인스턴스가 남긴 _HiddenTab 디스크립터에서
+            # 원본 탭을 회수한다 (없으면 getattr 이 None 을 반환해 뷰어가 소실됨).
+            desc = None
+            for klass in type.mro(target_class):
+                if "category_tab" in klass.__dict__:
+                    desc = klass.__dict__["category_tab"]
+                    break
+            if desc is not None and isinstance(getattr(desc, "_orig", None), dict):
+                _ORIG_TABS.setdefault(p_id, desc._orig)
             tab = _ORIG_TABS.get(p_id) or getattr(target_class, "category_tab", None)
             if not isinstance(tab, dict):
                 continue
