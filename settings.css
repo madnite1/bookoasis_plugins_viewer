@@ -1,0 +1,85 @@
+.pv-settings-desc {
+  margin: 0 0 0.4rem 0;
+  font-size: 0.82rem;
+  color: #94a3b8;
+}
+
+.pv-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0.9rem;
+}
+
+.pv-settings-loading,
+.pv-settings-empty,
+.pv-settings-error {
+  font-size: 0.82rem;
+  color: #94a3b8;
+  padding: 0.6rem 0;
+}
+
+.pv-settings-error {
+  color: #f87171;
+}
+
+.pv-card {
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 0.9rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.pv-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding-bottom: 0.55rem;
+}
+
+.pv-card-title {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #f1f5f9;
+  word-break: break-all;
+}
+
+.pv-card-version {
+  font-size: 0.72rem;
+  color: #a78bfa;
+  white-space: nowrap;
+}
+
+.pv-card-id {
+  font-size: 0.7rem;
+  color: #64748b;
+  word-break: break-all;
+}
+
+.pv-card-sessions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.9rem;
+}
+
+.pv-session-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  color: #cbd5e1;
+  cursor: pointer;
+  user-select: none;
+}
+
+.pv-session-check input[type="checkbox"] {
+  accent-color: #a855f7;
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}

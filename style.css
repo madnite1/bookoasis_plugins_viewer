@@ -1,0 +1,89 @@
+/* 통합 뷰어 — 테마 CSS 변수 연동 */
+.uf-plugin {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 80vh;
+  box-sizing: border-box;
+  background: var(--app-bg-main, #0f172a);
+  color: var(--app-text-primary, #f8fafc);
+}
+
+.uf-tabsbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--app-border-light, rgba(148, 163, 184, 0.18));
+  background: var(--app-bg-sidebar, #1e293b);
+  flex-shrink: 0;
+}
+
+.uf-tabs {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.uf-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--app-text-muted, #94a3b8);
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+}
+
+.uf-tab:hover {
+  background: var(--app-bg-card-hover, rgba(148, 163, 184, 0.08));
+  color: var(--app-text-primary, #f8fafc);
+}
+
+.uf-tab.is-active {
+  background: var(--app-accent, #c084fc);
+  color: #ffffff;
+  border-color: var(--app-accent, #c084fc);
+}
+
+.uf-tab .uf-tab-icon {
+  font-size: 0.8rem;
+  opacity: 0.9;
+}
+
+.uf-tabs-meta {
+  color: var(--app-text-muted, #94a3b8);
+  font-size: 0.78rem;
+}
+
+.uf-panes {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+}
+
+.uf-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--app-text-muted, #94a3b8);
+  font-size: 0.95rem;
+  text-align: center;
+  padding: 2rem;
+}
+
+.uf-status.is-error {
+  color: #ef4444;
+}
+
+.uf-hidden {
+  display: none !important;
+}
