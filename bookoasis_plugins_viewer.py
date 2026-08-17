@@ -288,7 +288,7 @@ class BookOasisPluginsViewerMetadataProvider(BaseMetadataProvider):
                 "icon": (tab.get("icon") if isinstance(tab, dict) else None) or "fa-solid fa-puzzle-piece",
                 "order": int((tab.get("order") if isinstance(tab, dict) else 50) or 50),
             })
-        tabs.sort(key=lambda x: x["order"])
+        tabs.sort(key=lambda x: x["title"].lower())
 
         # 설정 페이지(카드형 UI)용 카탈로그: 이름/버전/세션/현재 설정값
         catalog = []
