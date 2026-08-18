@@ -138,10 +138,33 @@
     }
   }
 
+  function cleanUpSidebarTabs(viewerList) {
+    if (!Array.isArray(viewerList)) return;
+    viewerList.forEach((p) => {
+      if (!p || !p.id || p.id === SELF_ID) return;
+      try {
+        const selectors = [
+          `[data-plugin-id="${CSS.escape(p.id)}"]`,
+          `[data-tab-id="${CSS.escape(p.id)}"]`,
+          `a[href*="/plugins/${CSS.escape(p.id)}"]`,
+          `a[href*="/category/${CSS.escape(p.id)}"]`,
+        ];
+        selectors.forEach((sel) => {
+          document.querySelectorAll(sel).forEach((el) => {
+            if (!el.closest('[data-uf-root]')) {
+              el.style.display = 'none';
+            }
+          });
+        });
+      } catch (_) {}
+    });
+  }
+
   async function init() {
     try {
       plugins = await fetchViewers();
       renderTabs();
+      cleanUpSidebarTabs(plugins);
     } catch (err) {
       console.error('[UnifiedViewer] init error:', err);
       showStatus('뷰어 목록을 불러오지 못했습니다: ' + (err.message || '오류'), true);

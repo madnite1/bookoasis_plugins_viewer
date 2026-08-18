@@ -69,15 +69,27 @@ def _tab_sessions(tab):
     return ["general"]
 
 
-def _load_general_config():
-    """설정 페이지가 general DB에 저장하는 이 플러그인의 설정을 읽는다."""
+_CONFIG_CACHE = None
+_CONFIG_CACHE_TIME = 0.0
+_CACHE_TTL = 3.0  # 초 단위 메모리 캐시 TTL
+
+
+def _load_general_config(force_refresh=False):
+    """설정 페이지가 general DB에 저장하는 이 플러그인의 설정을 읽는다 (메모리 캐시 적용)."""
+    global _CONFIG_CACHE, _CONFIG_CACHE_TIME
+    import time
+    now = time.time()
+    if not force_refresh and _CONFIG_CACHE is not None and (now - _CONFIG_CACHE_TIME < _CACHE_TTL):
+        return _CONFIG_CACHE
     try:
         from repositories.metadata_repository import MetadataRepository
         raw = MetadataRepository.get_setting_value("general", f"PLUGIN_CONFIG_{SELF_ID}")
         data = json.loads(raw) if raw else {}
-        return data if isinstance(data, dict) else {}
+        _CONFIG_CACHE = data if isinstance(data, dict) else {}
     except Exception:
-        return {}
+        _CONFIG_CACHE = {}
+    _CONFIG_CACHE_TIME = now
+    return _CONFIG_CACHE
 
 
 def _session_order(config, session):
@@ -145,10 +157,10 @@ def _unified_sessions_for(config, p_id, sessions):
     return picked
 
 
-def _apply_session_overrides():
+def _apply_session_overrides(force_refresh_config=False):
     """통합 표시로 선택된 플러그인의 category_tab 을 None 으로 오버라이드해
     사이드바 개별 탭에서 숨긴다. 선택 해제 시 원복한다."""
-    config = _load_general_config()
+    config = _load_general_config(force_refresh=force_refresh_config)
     for p_id, _name, sessions, cls in _discover_viewer_classes():
         try:
             in_unified = bool(_unified_sessions_for(config, p_id, sessions))
@@ -330,3 +342,9 @@ class BookOasisPluginsViewerMetadataProvider(BaseMetadataProvider):
 # (코어는 항상 이 시점 이후에 클래스 속성을 읽으므로 동작 동일)
 BookOasisPluginsViewerMetadataProvider.config_schema = _DynamicConfigSchema()
 BookOasisPluginsViewerMetadataProvider.category_tab = _DynamicCategoryTab()
+
+# 모듈 로드 즉시 오버라이드 적용 (코어가 다른 플러그인의 category_tab을 먼저 읽는 평가 순서 경쟁 조건 차단)
+try:
+    _apply_session_overrides(force_refresh_config=True)
+except Exception:
+    pass
