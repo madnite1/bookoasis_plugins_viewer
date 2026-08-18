@@ -83,3 +83,94 @@
   height: 15px;
   cursor: pointer;
 }
+
+/* ---------- 세션 레인 (탭 순서 지정) ---------- */
+
+.pv-lanes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin-bottom: 1.1rem;
+}
+
+.pv-lane {
+  display: flex;
+  align-items: stretch;
+  gap: 0.6rem;
+}
+
+.pv-lane-title {
+  flex: 0 0 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #cbd5e1;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+}
+
+.pv-lane-body {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.3rem;
+  padding: 0.35rem 0.5rem;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+}
+
+.pv-lane-body.pv-lane-empty::after {
+  content: '표시할 플러그인을 아래 카드에서 체크하세요';
+  font-size: 0.72rem;
+  color: #475569;
+}
+
+.pv-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.28rem 0.3rem 0.28rem 0.6rem;
+  background: rgba(168, 85, 247, 0.16);
+  border: 1px solid rgba(168, 85, 247, 0.45);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  color: #e9d5ff;
+  cursor: grab;
+  user-select: none;
+}
+
+.pv-chip.pv-dragging {
+  opacity: 0.45;
+  cursor: grabbing;
+}
+
+.pv-chip-name {
+  white-space: nowrap;
+}
+
+.pv-chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.05rem;
+  height: 1.05rem;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  border-radius: 50%;
+  color: #cbd5e1;
+  font-size: 0.8rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pv-chip-x:hover {
+  background: #ef4444;
+  color: #fff;
+}

@@ -80,6 +80,24 @@ def _load_general_config():
         return {}
 
 
+def _session_order(config, session):
+    """설정에 저장된 세션별 탭 순서(TAB_ORDER_<session>: 콤마 구분 id 목록)를 파싱."""
+    raw = config.get(f"TAB_ORDER_{session}", "")
+    if not isinstance(raw, str):
+        return []
+    return [s for s in (x.strip() for x in raw.split(",")) if s]
+
+
+def _sort_by_order(items, order, name_key):
+    """order 목록에 있는 항목은 그 순서대로, 없는 항목은 뒤에 이름순으로."""
+    pos = {p_id: i for i, p_id in enumerate(order)}
+    known = [it for it in items if it["id"] in pos]
+    rest = [it for it in items if it["id"] not in pos]
+    known.sort(key=lambda it: pos[it["id"]])
+    rest.sort(key=lambda it: str(it.get(name_key) or "").lower())
+    return known + rest
+
+
 def _is_on(value):
     if isinstance(value, bool):
         return value
@@ -288,7 +306,7 @@ class BookOasisPluginsViewerMetadataProvider(BaseMetadataProvider):
                 "icon": (tab.get("icon") if isinstance(tab, dict) else None) or "fa-solid fa-puzzle-piece",
                 "order": int((tab.get("order") if isinstance(tab, dict) else 50) or 50),
             })
-        tabs.sort(key=lambda x: x["title"].lower())
+        tabs = _sort_by_order(tabs, _session_order(config, session), "title")
 
         # 설정 페이지(카드형 UI)용 카탈로그: 이름/버전/세션/현재 설정값
         catalog = []
@@ -302,7 +320,10 @@ class BookOasisPluginsViewerMetadataProvider(BaseMetadataProvider):
             })
         catalog.sort(key=lambda x: x["name"].lower())
 
-        return {"success": True, "viewers": tabs, "catalog": catalog}
+        # 설정 페이지 세션 레인용: 세션별 현재 저장된 순서
+        orders = {s: _session_order(config, s) for s in _SESSION_LABELS}
+
+        return {"success": True, "viewers": tabs, "catalog": catalog, "orders": orders}
 
 
 # 검증기 통과용 리터럴 선언을 런타임 동적 디스크립터로 교체
