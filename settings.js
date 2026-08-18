@@ -241,23 +241,31 @@
     });
   }
 
-  function bindFormSubmitReload() {
-    const form = root.closest('form') || root.closest('.plugin-config-form');
-    if (!form) return;
-    form.addEventListener('submit', () => {
-      setTimeout(() => {
-        if (typeof window.loadLibraries === 'function') {
-          try {
-            window.loadLibraries();
-          } catch (e) {
-            console.warn('[PluginsViewer-Settings] loadLibraries error:', e);
-          }
+  function wrapSaveConfigApi() {
+    try {
+      if (window.api && typeof window.api.saveMetadataPluginConfig === 'function') {
+        if (!window.__origSaveMetadataPluginConfig) {
+          window.__origSaveMetadataPluginConfig = window.api.saveMetadataPluginConfig;
+          window.api.saveMetadataPluginConfig = async function (...args) {
+            const res = await window.__origSaveMetadataPluginConfig.apply(this, args);
+            if (res && res.success) {
+              if (typeof window.loadLibraries === 'function') {
+                try {
+                  await window.loadLibraries();
+                } catch (e) {
+                  console.warn('[PluginsViewer-Settings] loadLibraries error:', e);
+                }
+              }
+            }
+            return res;
+          };
         }
-      }, 500);
-    });
+      }
+    } catch (_) {}
   }
 
   async function load() {
+    wrapSaveConfigApi();
     try {
       const res = await fetch(`/api/media/dashboard/widgets/${encodeURIComponent(pluginId)}/data?type=general`, {
         credentials: 'same-origin',
@@ -271,7 +279,6 @@
       ensureOrderInputs();
       renderCards(catalog);
       renderLanes(catalog, data.orders || {});
-      bindFormSubmitReload();
     } catch (err) {
       console.error('[PluginsViewer-Settings] load error:', err);
       grid.innerHTML = `<div class="pv-settings-error">플러그인 목록을 불러오지 못했습니다: ${esc(err.message || '오류')}</div>`;
