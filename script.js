@@ -140,9 +140,13 @@
 
   function cleanUpSidebarTabs(viewerList) {
     if (!Array.isArray(viewerList)) return;
-    viewerList.forEach((p) => {
-      if (!p || !p.id || p.id === SELF_ID) return;
-      try {
+    const hiddenIds = new Set(viewerList.map((p) => p && p.id).filter(Boolean));
+    hiddenIds.delete(SELF_ID);
+
+    try {
+      // 1. 모아보기에 포함된 플러그인의 개별 사이드바 탭 숨김
+      viewerList.forEach((p) => {
+        if (!p || !p.id || p.id === SELF_ID) return;
         const selectors = [
           `[data-plugin-id="${CSS.escape(p.id)}"]`,
           `[data-tab-id="${CSS.escape(p.id)}"]`,
@@ -156,8 +160,17 @@
             }
           });
         });
-      } catch (_) {}
-    });
+      });
+
+      // 2. 모아보기에서 체크 해제된 플러그인의 사이드바 탭 복원
+      document.querySelectorAll('[data-role="sidebar-category-dynamic"], [data-plugin-id], [data-tab-id]').forEach((el) => {
+        if (el.closest('[data-uf-root]')) return;
+        const pid = el.dataset.pluginId || el.dataset.tabId || (el.dataset.id && el.dataset.id.startsWith('plugin_') ? el.dataset.id.replace('plugin_', '') : null);
+        if (pid && !hiddenIds.has(pid) && el.style.display === 'none') {
+          el.style.display = '';
+        }
+      });
+    } catch (_) {}
   }
 
   async function init() {

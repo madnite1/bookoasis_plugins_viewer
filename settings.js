@@ -241,6 +241,22 @@
     });
   }
 
+  function bindFormSubmitReload() {
+    const form = root.closest('form') || root.closest('.plugin-config-form');
+    if (!form) return;
+    form.addEventListener('submit', () => {
+      setTimeout(() => {
+        if (typeof window.loadLibraries === 'function') {
+          try {
+            window.loadLibraries();
+          } catch (e) {
+            console.warn('[PluginsViewer-Settings] loadLibraries error:', e);
+          }
+        }
+      }, 500);
+    });
+  }
+
   async function load() {
     try {
       const res = await fetch(`/api/media/dashboard/widgets/${encodeURIComponent(pluginId)}/data?type=general`, {
@@ -255,6 +271,7 @@
       ensureOrderInputs();
       renderCards(catalog);
       renderLanes(catalog, data.orders || {});
+      bindFormSubmitReload();
     } catch (err) {
       console.error('[PluginsViewer-Settings] load error:', err);
       grid.innerHTML = `<div class="pv-settings-error">플러그인 목록을 불러오지 못했습니다: ${esc(err.message || '오류')}</div>`;
