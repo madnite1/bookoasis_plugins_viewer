@@ -30,7 +30,7 @@ _SESSION_LABELS = {
 _ORIG_TABS = {}
 _CONFIG_CACHE = None
 _CONFIG_CACHE_TIME = 0.0
-_CACHE_TTL = 0.5  # 0.5초 짧은 메모리 캐시 (단일 요청 내 DB 중복 조회 방지 + 설정 변경 시 즉시 반영)
+_CACHE_TTL = 0.1  # 0.1초 초경량 메모리 캐시 (단일 요청 루프 전용 + 설정 변경 즉시 반영)
 
 
 def _self_installed():
