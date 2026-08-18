@@ -114,10 +114,26 @@ def _unified_sessions_for(config, p_id, sessions):
     return picked
 
 
+def _current_request_session():
+    """Flask request context에서 현재 요청 세션(db_type)을 추출한다."""
+    try:
+        from flask import request
+        if request:
+            s = request.args.get('type') or request.form.get('type')
+            if not s and request.is_json:
+                data = request.get_json(silent=True) or {}
+                s = data.get('type')
+            if s and str(s).strip().lower() in _SESSION_LABELS:
+                return str(s).strip().lower()
+    except Exception:
+        pass
+    return None
+
+
 class _DynamicPluginCategoryTab:
     """개별 플러그인의 category_tab 동적 디스크립터.
-    코어가 어떤 순서로 category_tab을 읽더라도, 최신 DB 설정을 실시간 평가하여
-    개별 사이드바 탭 노출 여부(dict 또는 None)를 결정한다.
+    현재 요청된 세션(db_type)에 대해 해당 플러그인이 모아보기에 통합 표시되도록 선택된 경우에만
+    해당 세션 사이드바에서 개별 탭을 숨긴다 (None 반환).
     """
 
     def __init__(self, plugin_id, orig_tab):
@@ -130,8 +146,15 @@ class _DynamicPluginCategoryTab:
         try:
             config = _load_general_config()
             sessions = _tab_sessions(self._orig)
-            if _unified_sessions_for(config, self.plugin_id, sessions):
-                return None
+            req_session = _current_request_session()
+
+            if req_session:
+                if req_session in sessions and _is_on(config.get(f"SHOW_{self.plugin_id}__{req_session}", False)):
+                    return None
+            else:
+                picked = _unified_sessions_for(config, self.plugin_id, sessions)
+                if picked and len(picked) == len(sessions):
+                    return None
         except Exception:
             pass
         return self._orig
