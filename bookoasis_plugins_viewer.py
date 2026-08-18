@@ -28,9 +28,6 @@ _SESSION_LABELS = {
 
 # 런타임 category_tab 오버라이드 원본 보관: {plugin_id: 원본 category_tab dict}
 _ORIG_TABS = {}
-_CONFIG_CACHE = None
-_CONFIG_CACHE_TIME = 0.0
-_CACHE_TTL = 0.1  # 0.1초 초경량 메모리 캐시 (단일 요청 루프 전용 + 설정 변경 즉시 반영)
 
 
 def _self_installed():
@@ -40,29 +37,21 @@ def _self_installed():
 
 
 def _load_general_config(force_refresh=False):
-    """모든 세션 DB(general, adult, audiobook, video)에 저장된 플러그인 설정을 읽어 병합한다."""
-    global _CONFIG_CACHE, _CONFIG_CACHE_TIME
-    import time
-    now = time.time()
-    if not force_refresh and _CONFIG_CACHE is not None and (now - _CONFIG_CACHE_TIME < _CACHE_TTL):
-        return _CONFIG_CACHE
+    """모든 세션 DB(general, adult, audiobook, video)에 저장된 플러그인 설정을 표준 gateway를 통해 실시간으로 읽어 병합한다."""
     merged = {}
     try:
-        from repositories.metadata_repository import MetadataRepository
+        from services.plugin_db_gateway import PluginDatabaseGateway
         for session in ("general", "adult", "audiobook", "video"):
             try:
-                raw = MetadataRepository.get_setting_value(session, f"PLUGIN_CONFIG_{SELF_ID}")
-                if raw:
-                    data = json.loads(raw)
-                    if isinstance(data, dict):
-                        merged.update(data)
+                gw = PluginDatabaseGateway(session)
+                data = gw.get_plugin_config(SELF_ID)
+                if isinstance(data, dict):
+                    merged.update(data)
             except Exception:
                 pass
     except Exception:
         pass
-    _CONFIG_CACHE = merged
-    _CONFIG_CACHE_TIME = now
-    return _CONFIG_CACHE
+    return merged
 
 
 def _tab_sessions(tab):
@@ -76,8 +65,8 @@ def _tab_sessions(tab):
             return list(_SESSION_LABELS.keys())
         raw = [raw]
     if isinstance(raw, (list, tuple, set)):
-        out = [s for s in (str(x).strip().lower() for x in raw) if s in _SESSION_LABELS]
-        return out or ["general"]
+        valid = [str(x).strip().lower() for x in raw if str(x).strip().lower() in _SESSION_LABELS]
+        return valid or ["general"]
     return ["general"]
 
 
@@ -144,6 +133,7 @@ class _DynamicPluginCategoryTab:
         if not _self_installed():
             return self._orig
         try:
+            _discover_viewer_classes()
             config = _load_general_config()
             sessions = _tab_sessions(self._orig)
             req_session = _current_request_session()
@@ -164,13 +154,13 @@ def _discover_viewer_classes():
     """category_tab 을 가진 (자신 제외) 설치 플러그인 탐색 및 동적 디스크립터 바인딩."""
     viewers = []
     try:
-        from services.metadata_factory import MetadataFactory
+        from plugins.metadata.base import BaseMetadataProvider
         seen = set()
-        for provider_name, target_class in MetadataFactory._discover_provider_classes():
+        for target_class in BaseMetadataProvider.__subclasses__():
             if not target_class:
                 continue
-            p_id = getattr(target_class, "id", provider_name)
-            if p_id == SELF_ID or p_id in seen:
+            p_id = getattr(target_class, "id", None)
+            if not p_id or p_id == SELF_ID or p_id in seen:
                 continue
             seen.add(p_id)
 
@@ -207,7 +197,6 @@ def _discover_viewer_classes():
 
 def _apply_session_overrides(force_refresh_config=False):
     """모든 타겟 뷰어 클래스 탐색 및 오버라이드 바인딩 적용."""
-    _load_general_config(force_refresh=force_refresh_config)
     _discover_viewer_classes()
 
 

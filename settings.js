@@ -241,25 +241,34 @@
     });
   }
 
+  function refreshOnlyViewerTabs() {
+    try {
+      window.dispatchEvent(new CustomEvent('bookoasis_plugins_viewer:config_updated'));
+      if (typeof window.reloadBookOasisPluginsViewerTabs === 'function') {
+        window.reloadBookOasisPluginsViewerTabs();
+      }
+    } catch (_) {}
+  }
+
   function wrapSaveConfigApi() {
     try {
-      if (window.api && typeof window.api.saveMetadataPluginConfig === 'function') {
-        if (!window.__origSaveMetadataPluginConfig) {
-          window.__origSaveMetadataPluginConfig = window.api.saveMetadataPluginConfig;
-          window.api.saveMetadataPluginConfig = async function (...args) {
-            const res = await window.__origSaveMetadataPluginConfig.apply(this, args);
-            if (res && res.success) {
-              if (typeof window.loadLibraries === 'function') {
-                try {
-                  await window.loadLibraries();
-                } catch (e) {
-                  console.warn('[PluginsViewer-Settings] loadLibraries error:', e);
+      if (!window.__origFetchForPluginsViewer) {
+        window.__origFetchForPluginsViewer = window.fetch;
+        window.fetch = async function (resource, options) {
+          const response = await window.__origFetchForPluginsViewer.apply(this, arguments);
+          try {
+            const url = typeof resource === 'string' ? resource : (resource && resource.url ? resource.url : '');
+            if (url && url.includes('/api/media/metadata/plugins/save-config') && options && options.method === 'POST') {
+              const cloned = response.clone();
+              cloned.json().then((data) => {
+                if (data && data.success) {
+                  refreshOnlyViewerTabs();
                 }
-              }
+              }).catch(() => {});
             }
-            return res;
-          };
-        }
+          } catch (_) {}
+          return response;
+        };
       }
     } catch (_) {}
   }

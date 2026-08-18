@@ -122,7 +122,7 @@
     plugins.forEach((p) => {
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = 'uf-tab';
+      btn.className = 'uf-tab' + (p.id === activeId ? ' is-active' : '');
       btn.dataset.pluginId = p.id;
       const icon = p.icon || 'fa-solid fa-puzzle-piece';
       btn.innerHTML = `<i class="uf-tab-icon ${escapeHtml(icon)}"></i><span>${escapeHtml(p.title || p.id)}</span>`;
@@ -133,8 +133,14 @@
 
     if (plugins.length === 0) {
       showStatus('이 보관함의 통합 뷰어에 표시할 플러그인이 없습니다. 설정 > 플러그인 > 통합 뷰어에서 선택하세요.', true);
+      panesEl.innerHTML = '';
+      activeId = null;
     } else {
-      activate(plugins[0].id);
+      const stillActive = plugins.some((p) => p.id === activeId);
+      if (!stillActive) {
+        activeId = null;
+        activate(plugins[0].id);
+      }
     }
   }
 
@@ -172,6 +178,19 @@
       });
     } catch (_) {}
   }
+
+  async function reloadViewerTabs() {
+    try {
+      plugins = await fetchViewers();
+      renderTabs();
+      cleanUpSidebarTabs(plugins);
+    } catch (err) {
+      console.error('[UnifiedViewer] reload error:', err);
+    }
+  }
+
+  window.reloadBookOasisPluginsViewerTabs = reloadViewerTabs;
+  window.addEventListener('bookoasis_plugins_viewer:config_updated', reloadViewerTabs);
 
   async function init() {
     try {
