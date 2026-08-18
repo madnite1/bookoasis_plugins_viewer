@@ -174,3 +174,14 @@
   background: #ef4444;
   color: #fff;
 }
+
+.pv-lane-body.pv-drop-ok {
+  border-color: #a855f7;
+  border-style: solid;
+}
+
+.pv-lane-body.pv-drop-deny {
+  border-color: #ef4444;
+  border-style: solid;
+  cursor: not-allowed;
+}

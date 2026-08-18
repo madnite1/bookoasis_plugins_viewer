@@ -1,10 +1,11 @@
-/* 플러그인 모아보기 — 설정 페이지: 세션 레인(칩 드래그 순서 지정) + 카드형 세션 선택 UI
+/* 플러그인 모아보기 — 설정 페이지: 세션 레인(칩 드래그 순서/세션 이동) + 카드형 세션 선택 UI
    코어 계약: new Function('window','pluginId','root','config', js)(...)
    저장은 코어 폼 submit이 root 내부 input[name]을 수집하므로:
    - 체크박스 name: SHOW_<plugin_id>__<session>
    - 세션별 순서 hidden input name: TAB_ORDER_<session> (콤마 구분 id 목록)
-   카드 체크 ON → 레인에 칩 추가, OFF/칩 x 클릭 → 칩 제거(체크 해제 연동),
-   레인 내 칩 드래그앤드롭으로 순서 변경. 저장 시 그대로 PLUGIN_CONFIG 반영. */
+   카드 체크 ON → 레인에 칩 추가, OFF/칩 x 클릭 → 칩 제거(체크 해제 연동).
+   칩 드래그: 같은 레인 = 순서 변경, 다른 레인 = 세션 이동(체크박스 연동).
+   플러그인이 지원하지 않는 세션 레인으로는 이동 불가. */
 (function () {
   'use strict';
 
@@ -45,6 +46,16 @@
     return lanesEl.querySelector(`[data-pv-lane="${session}"]`);
   }
 
+  function chipSession(chip) {
+    const body = chip.closest('[data-pv-lane]');
+    return body ? body.getAttribute('data-pv-lane') : null;
+  }
+
+  function supports(pluginId, session) {
+    const p = catalogById[pluginId];
+    return !!(p && Array.isArray(p.sessions) && p.sessions.includes(session));
+  }
+
   function syncOrder(session) {
     const body = laneBody(session);
     if (!body) return;
@@ -53,15 +64,39 @@
     body.classList.toggle('pv-lane-empty', !ids.length);
   }
 
+  function syncAllOrders() {
+    SESSIONS.forEach(syncOrder);
+  }
+
   function findCheckbox(pluginId, session) {
     return grid.querySelector(`input[name="SHOW_${CSS.escape(pluginId)}__${CSS.escape(session)}"]`);
+  }
+
+  function setChecked(pluginId, session, on) {
+    const cb = findCheckbox(pluginId, session);
+    if (cb) cb.checked = !!on;
   }
 
   /* ---------- 칩 ---------- */
 
   let dragChip = null;
+  let dragFromSession = null;
 
-  function makeChip(pluginId, session) {
+  function clearDropHints() {
+    lanesEl.querySelectorAll('.pv-lane-body').forEach((el) =>
+      el.classList.remove('pv-drop-ok', 'pv-drop-deny'));
+  }
+
+  // 세션 이동 확정: 출발/도착 체크박스 연동 + 순서 재계산
+  function finishMove(pluginId, fromSession, toSession) {
+    if (fromSession !== toSession) {
+      setChecked(pluginId, fromSession, false);
+      setChecked(pluginId, toSession, true);
+    }
+    syncAllOrders();
+  }
+
+  function makeChip(pluginId) {
     const p = catalogById[pluginId] || { name: pluginId };
     const chip = document.createElement('span');
     chip.className = 'pv-chip';
@@ -71,28 +106,40 @@
 
     chip.querySelector('.pv-chip-x').addEventListener('click', (e) => {
       e.preventDefault();
-      const cb = findCheckbox(pluginId, session);
-      if (cb) cb.checked = false;
+      const s = chipSession(chip);
+      if (s) setChecked(pluginId, s, false);
       chip.remove();
-      syncOrder(session);
+      if (s) syncOrder(s);
     });
 
     chip.addEventListener('dragstart', (e) => {
       dragChip = chip;
+      dragFromSession = chipSession(chip);
       chip.classList.add('pv-dragging');
       e.dataTransfer.effectAllowed = 'move';
       try { e.dataTransfer.setData('text/plain', pluginId); } catch (_) {}
     });
     chip.addEventListener('dragend', () => {
       chip.classList.remove('pv-dragging');
+      clearDropHints();
+      if (dragChip) {
+        // 드롭 이벤트가 안 온 경우에도 DOM 상 현재 위치 기준으로 확정
+        const toSession = chipSession(chip);
+        if (toSession && dragFromSession) finishMove(pluginId, dragFromSession, toSession);
+      }
       dragChip = null;
-      syncOrder(session);
+      dragFromSession = null;
     });
+    // 다른 칩 위로 드래그: 지원 세션이면 그 위치로 삽입(레인 이동 포함)
     chip.addEventListener('dragover', (e) => {
-      if (!dragChip || dragChip === chip || dragChip.parentElement !== chip.parentElement) return;
+      if (!dragChip || dragChip === chip) return;
+      const targetSession = chipSession(chip);
+      const dragId = dragChip.getAttribute('data-pv-id');
+      if (!targetSession || !supports(dragId, targetSession)) return;
       e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
       const chips = Array.from(chip.parentElement.querySelectorAll('.pv-chip'));
-      if (chips.indexOf(dragChip) < chips.indexOf(chip)) chip.after(dragChip);
+      if (chips.includes(dragChip) && chips.indexOf(dragChip) < chips.indexOf(chip)) chip.after(dragChip);
       else chip.before(dragChip);
     });
     return chip;
@@ -101,7 +148,7 @@
   function addChip(pluginId, session) {
     const body = laneBody(session);
     if (!body || body.querySelector(`.pv-chip[data-pv-id="${CSS.escape(pluginId)}"]`)) return;
-    body.appendChild(makeChip(pluginId, session));
+    body.appendChild(makeChip(pluginId));
     syncOrder(session);
   }
 
@@ -122,10 +169,27 @@
       lane.className = 'pv-lane';
       lane.innerHTML = `<div class="pv-lane-title">${esc(SESSION_LABELS[s])}</div><div class="pv-lane-body pv-lane-empty" data-pv-lane="${esc(s)}"></div>`;
       const body = lane.querySelector('.pv-lane-body');
+      // 레인 빈 공간으로 드래그: 지원 세션이면 맨 뒤에 추가(레인 이동 포함)
       body.addEventListener('dragover', (e) => {
-        if (dragChip && dragChip.parentElement === body) e.preventDefault();
+        if (!dragChip) return;
+        const dragId = dragChip.getAttribute('data-pv-id');
+        clearDropHints();
+        if (!supports(dragId, s)) {
+          body.classList.add('pv-drop-deny');
+          return;
+        }
+        body.classList.add('pv-drop-ok');
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (dragChip.parentElement !== body && !e.target.closest('.pv-chip')) {
+          body.appendChild(dragChip);
+        }
       });
-      body.addEventListener('drop', (e) => e.preventDefault());
+      body.addEventListener('dragleave', () => body.classList.remove('pv-drop-ok', 'pv-drop-deny'));
+      body.addEventListener('drop', (e) => {
+        e.preventDefault();
+        clearDropHints();
+      });
       lanesEl.appendChild(lane);
     });
 
