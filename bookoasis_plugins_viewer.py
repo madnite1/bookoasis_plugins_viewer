@@ -9,13 +9,10 @@ BookOasis 플러그인 뷰어 (Plugins Viewer) 플러그인.
   - 통합 뷰어 자체는 모든 세션(sessions: all)에 노출된다.
   - 설정에서 뷰어별·세션별 체크박스(SHOW_<plugin_id>__<session>)로
     "이 보관함의 통합 뷰어에 표시"를 선택한다 (기본: 꺼짐 = 기존 개별 탭 유지).
-  - 하나라도 통합 표시로 선택된 플러그인은 category_tab 을 런타임에 None 으로
-    오버라이드하여 사이드바 개별 탭에서 숨긴다 (파일 무수정, 메모리상 오버라이드,
-    체크 해제 시 원복). 데이터 API(/dashboard/widgets/<id>/data)는 계속 동작한다.
+  - 하나라도 통합 표시로 선택된 플러그인은 category_tab 을 런타임 디스크립터로
+    오버라이드하여 사이드바 개별 탭에서 실시간으로 숨긴다.
   - 프론트엔드는 get_dashboard_data 로 현재 세션의 탭 목록을 받고,
     각 뷰어의 UI 번들은 /api/media/plugins/<id>/ui 로 조회해 직접 마운트한다.
-  - 개별 뷰어는 window.__bookOasisViewerCleanups 레지스트리로 자체 정리되므로
-    탭 전환 시 이전 뷰어 클린업이 보장된다. 기존 뷰어 코드는 0% 수정.
 """
 import json
 
@@ -31,6 +28,9 @@ _SESSION_LABELS = {
 
 # 런타임 category_tab 오버라이드 원본 보관: {plugin_id: 원본 category_tab dict}
 _ORIG_TABS = {}
+_CONFIG_CACHE = None
+_CONFIG_CACHE_TIME = 0.0
+_CACHE_TTL = 0.5  # 0.5초 짧은 메모리 캐시 (단일 요청 내 DB 중복 조회 방지 + 설정 변경 시 즉시 반영)
 
 
 def _self_installed():
@@ -39,43 +39,8 @@ def _self_installed():
     return os.path.isdir(os.path.dirname(os.path.abspath(__file__)))
 
 
-class _HiddenTab:
-    """개별 사이드바 탭 숨김용 자가 복구 디스크립터.
-
-    코어가 category_tab 을 읽을 때마다 플러그인 모아보기가 아직 설치되어
-    있는지 확인하고, 삭제되었으면 원본 탭을 반환한다 (숨김 자동 해제).
-    """
-
-    def __init__(self, orig_tab):
-        self._orig = orig_tab
-
-    def __get__(self, obj, objtype=None):
-        if not _self_installed():
-            return self._orig
-        return None
-
-
-def _tab_sessions(tab):
-    raw = tab.get("sessions")
-    if raw is None:
-        return ["general"]
-    if isinstance(raw, str):
-        if raw.strip().lower() == "all":
-            return list(_SESSION_LABELS.keys())
-        raw = [raw]
-    if isinstance(raw, (list, tuple, set)):
-        out = [s for s in (str(x).strip().lower() for x in raw) if s in _SESSION_LABELS]
-        return out or ["general"]
-    return ["general"]
-
-
-_CONFIG_CACHE = None
-_CONFIG_CACHE_TIME = 0.0
-_CACHE_TTL = 3.0  # 초 단위 메모리 캐시 TTL
-
-
 def _load_general_config(force_refresh=False):
-    """설정 페이지가 general DB에 저장하는 이 플러그인의 설정을 읽는다 (메모리 캐시 적용)."""
+    """설정 페이지가 general DB에 저장하는 이 플러그인의 설정을 읽는다."""
     global _CONFIG_CACHE, _CONFIG_CACHE_TIME
     import time
     now = time.time()
@@ -90,6 +55,22 @@ def _load_general_config(force_refresh=False):
         _CONFIG_CACHE = {}
     _CONFIG_CACHE_TIME = now
     return _CONFIG_CACHE
+
+
+def _tab_sessions(tab):
+    if not isinstance(tab, dict):
+        return ["general"]
+    raw = tab.get("sessions")
+    if raw is None:
+        return ["general"]
+    if isinstance(raw, str):
+        if raw.strip().lower() == "all":
+            return list(_SESSION_LABELS.keys())
+        raw = [raw]
+    if isinstance(raw, (list, tuple, set)):
+        out = [s for s in (str(x).strip().lower() for x in raw) if s in _SESSION_LABELS]
+        return out or ["general"]
+    return ["general"]
 
 
 def _session_order(config, session):
@@ -116,8 +97,40 @@ def _is_on(value):
     return str(value).strip().lower() not in ("0", "false", "off", "no", "")
 
 
+def _unified_sessions_for(config, p_id, sessions):
+    """설정에서 이 플러그인이 통합 표시되도록 선택된 세션 목록."""
+    picked = []
+    for s in sessions:
+        if _is_on(config.get(f"SHOW_{p_id}__{s}", False)):
+            picked.append(s)
+    return picked
+
+
+class _DynamicPluginCategoryTab:
+    """개별 플러그인의 category_tab 동적 디스크립터.
+    코어가 어떤 순서로 category_tab을 읽더라도, 최신 DB 설정을 실시간 평가하여
+    개별 사이드바 탭 노출 여부(dict 또는 None)를 결정한다.
+    """
+
+    def __init__(self, plugin_id, orig_tab):
+        self.plugin_id = plugin_id
+        self._orig = orig_tab
+
+    def __get__(self, obj, objtype=None):
+        if not _self_installed():
+            return self._orig
+        try:
+            config = _load_general_config()
+            sessions = _tab_sessions(self._orig)
+            if _unified_sessions_for(config, self.plugin_id, sessions):
+                return None
+        except Exception:
+            pass
+        return self._orig
+
+
 def _discover_viewer_classes():
-    """category_tab 을 가진 (자신 제외) 설치 플러그인 [(id, name, sessions, class), ...]"""
+    """category_tab 을 가진 (자신 제외) 설치 플러그인 탐색 및 동적 디스크립터 바인딩."""
     viewers = []
     try:
         from services.metadata_factory import MetadataFactory
@@ -129,49 +142,42 @@ def _discover_viewer_classes():
             if p_id == SELF_ID or p_id in seen:
                 continue
             seen.add(p_id)
-            # 재설치 대응: 이전 모듈 인스턴스가 남긴 _HiddenTab 디스크립터에서
-            # 원본 탭을 회수한다 (없으면 getattr 이 None 을 반환해 뷰어가 소실됨).
+
+            orig_tab = None
             desc = None
             for klass in type.mro(target_class):
                 if "category_tab" in klass.__dict__:
                     desc = klass.__dict__["category_tab"]
                     break
-            if desc is not None and isinstance(getattr(desc, "_orig", None), dict):
-                _ORIG_TABS.setdefault(p_id, desc._orig)
-            tab = _ORIG_TABS.get(p_id) or getattr(target_class, "category_tab", None)
-            if not isinstance(tab, dict):
+
+            if desc is not None and hasattr(desc, "_orig"):
+                orig_tab = desc._orig
+
+            if not isinstance(orig_tab, dict):
+                raw_tab = getattr(target_class, "category_tab", None)
+                if isinstance(raw_tab, dict):
+                    orig_tab = raw_tab
+
+            if not isinstance(orig_tab, dict):
                 continue
-            p_name = tab.get("title") or getattr(target_class, "name", p_id)
-            viewers.append((p_id, p_name, _tab_sessions(tab), target_class))
+
+            _ORIG_TABS[p_id] = orig_tab
+
+            # 모든 카테고리 뷰어 플러그인의 category_tab을 _DynamicPluginCategoryTab으로 감싸기
+            if not isinstance(desc, _DynamicPluginCategoryTab):
+                target_class.category_tab = _DynamicPluginCategoryTab(p_id, orig_tab)
+
+            p_name = orig_tab.get("title") or getattr(target_class, "name", p_id)
+            viewers.append((p_id, p_name, _tab_sessions(orig_tab), target_class))
     except Exception:
         pass
     return viewers
 
 
-def _unified_sessions_for(config, p_id, sessions):
-    """설정에서 이 플러그인이 통합 표시되도록 선택된 세션 목록."""
-    picked = []
-    for s in sessions:
-        if _is_on(config.get(f"SHOW_{p_id}__{s}", False)):
-            picked.append(s)
-    return picked
-
-
 def _apply_session_overrides(force_refresh_config=False):
-    """통합 표시로 선택된 플러그인의 category_tab 을 None 으로 오버라이드해
-    사이드바 개별 탭에서 숨긴다. 선택 해제 시 원복한다."""
-    config = _load_general_config(force_refresh=force_refresh_config)
-    for p_id, _name, sessions, cls in _discover_viewer_classes():
-        try:
-            in_unified = bool(_unified_sessions_for(config, p_id, sessions))
-            currently_hidden = p_id in _ORIG_TABS
-            if in_unified and not currently_hidden:
-                _ORIG_TABS[p_id] = getattr(cls, "category_tab", None)
-                cls.category_tab = _HiddenTab(_ORIG_TABS[p_id])
-            elif not in_unified and currently_hidden:
-                cls.category_tab = _ORIG_TABS.pop(p_id)
-        except Exception:
-            continue
+    """모든 타겟 뷰어 클래스 탐색 및 오버라이드 바인딩 적용."""
+    _load_general_config(force_refresh=force_refresh_config)
+    _discover_viewer_classes()
 
 
 def _read_plugin_version(p_id):
@@ -186,7 +192,6 @@ def _read_plugin_version(p_id):
             raw = f.read().strip()
         if not raw:
             return ""
-        # JSON 형식({"plugin version": "1.0.0"} 등) 우선 시도
         try:
             data = json.loads(raw)
             if isinstance(data, dict):
@@ -198,7 +203,6 @@ def _read_plugin_version(p_id):
             return str(data).strip()
         except (ValueError, TypeError):
             pass
-        # 일반 텍스트: 첫 유효 라인 (key: value 지원)
         for line in raw.splitlines():
             line = line.strip()
             if not line:
@@ -260,9 +264,6 @@ class _DynamicConfigSchema:
 
 
 class BookOasisPluginsViewerMetadataProvider(BaseMetadataProvider):
-    # 주의: id/config_schema/category_tab 은 plugin_manager 설치 검증기(AST 정적 분석)가
-    # 리터럴 값을 요구하므로 클래스 본문에는 리터럴로 선언하고,
-    # 동적 디스크립터는 클래스 정의 직후 모듈 레벨에서 재할당한다.
     id = "bookoasis_plugins_viewer"
     name = "플러그인 모아보기"
     is_searchable = False
@@ -302,7 +303,7 @@ class BookOasisPluginsViewerMetadataProvider(BaseMetadataProvider):
 
     def get_dashboard_data(self, db_type, limit=10):
         """현재 세션(db_type)의 통합 뷰어 탭 목록 반환."""
-        _apply_session_overrides()
+        _apply_session_overrides(force_refresh_config=True)
         config = _load_general_config()
         session = str(db_type or "general").strip().lower()
 
@@ -320,7 +321,6 @@ class BookOasisPluginsViewerMetadataProvider(BaseMetadataProvider):
             })
         tabs = _sort_by_order(tabs, _session_order(config, session), "title")
 
-        # 설정 페이지(카드형 UI)용 카탈로그: 이름/버전/세션/현재 설정값
         catalog = []
         for p_id, p_name, sessions, _cls in _discover_viewer_classes():
             catalog.append({
@@ -332,18 +332,16 @@ class BookOasisPluginsViewerMetadataProvider(BaseMetadataProvider):
             })
         catalog.sort(key=lambda x: x["name"].lower())
 
-        # 설정 페이지 세션 레인용: 세션별 현재 저장된 순서
         orders = {s: _session_order(config, s) for s in _SESSION_LABELS}
 
         return {"success": True, "viewers": tabs, "catalog": catalog, "orders": orders}
 
 
 # 검증기 통과용 리터럴 선언을 런타임 동적 디스크립터로 교체
-# (코어는 항상 이 시점 이후에 클래스 속성을 읽으므로 동작 동일)
 BookOasisPluginsViewerMetadataProvider.config_schema = _DynamicConfigSchema()
 BookOasisPluginsViewerMetadataProvider.category_tab = _DynamicCategoryTab()
 
-# 모듈 로드 즉시 오버라이드 적용 (코어가 다른 플러그인의 category_tab을 먼저 읽는 평가 순서 경쟁 조건 차단)
+# 모듈 로드 즉시 오버라이드 적용 (모든 대상 플러그인 category_tab을 실시간 디스크립터로 즉시 감쌈)
 try:
     _apply_session_overrides(force_refresh_config=True)
 except Exception:
