@@ -40,19 +40,27 @@ def _self_installed():
 
 
 def _load_general_config(force_refresh=False):
-    """설정 페이지가 general DB에 저장하는 이 플러그인의 설정을 읽는다."""
+    """모든 세션 DB(general, adult, audiobook, video)에 저장된 플러그인 설정을 읽어 병합한다."""
     global _CONFIG_CACHE, _CONFIG_CACHE_TIME
     import time
     now = time.time()
     if not force_refresh and _CONFIG_CACHE is not None and (now - _CONFIG_CACHE_TIME < _CACHE_TTL):
         return _CONFIG_CACHE
+    merged = {}
     try:
         from repositories.metadata_repository import MetadataRepository
-        raw = MetadataRepository.get_setting_value("general", f"PLUGIN_CONFIG_{SELF_ID}")
-        data = json.loads(raw) if raw else {}
-        _CONFIG_CACHE = data if isinstance(data, dict) else {}
+        for session in ("general", "adult", "audiobook", "video"):
+            try:
+                raw = MetadataRepository.get_setting_value(session, f"PLUGIN_CONFIG_{SELF_ID}")
+                if raw:
+                    data = json.loads(raw)
+                    if isinstance(data, dict):
+                        merged.update(data)
+            except Exception:
+                pass
     except Exception:
-        _CONFIG_CACHE = {}
+        pass
+    _CONFIG_CACHE = merged
     _CONFIG_CACHE_TIME = now
     return _CONFIG_CACHE
 
