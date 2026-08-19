@@ -191,6 +191,8 @@
 
   window.reloadBookOasisPluginsViewerTabs = reloadViewerTabs;
   window.addEventListener('bookoasis_plugins_viewer:config_updated', reloadViewerTabs);
+  // 플러그인 매니저에서 설치/삭제/활성/비활성/업데이트 성공 시 탭 목록 재조회
+  window.addEventListener('plugin_manager:plugins_changed', reloadViewerTabs);
 
   async function init() {
     try {
