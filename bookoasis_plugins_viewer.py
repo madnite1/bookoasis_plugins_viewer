@@ -51,7 +51,13 @@ def _db_config_for(session):
 
 
 def _db_enabled_map(session):
-    """특정 세션 DB의 PLUGIN_ENABLED_<id> 활성 상태 맵을 읽는다. (키: plugin_id, 값: bool)"""
+    """특정 세션 DB의 PLUGIN_ENABLED_<id> 활성 상태 맵을 읽는다. (키: plugin_id, 값: bool)
+
+    enabled 토글은 코어가 항상 'general' DB에만 저장한다 (plugin_service.toggle_plugin_enabled
+    호출부가 currentLibraryType을 넘기지만, 실제 저장은 general 세션 DB의 settings 테이블).
+    → 세션 DB에 PLUGIN_ENABLED_ 키가 하나도 없으면 general DB로 폴백해 읽는다.
+    """
+    session = str(session or "general").strip().lower()
     out = {}
     try:
         from repositories.metadata_repository import MetadataRepository
@@ -60,6 +66,12 @@ def _db_enabled_map(session):
             if str(k).startswith("PLUGIN_ENABLED_"):
                 pid = str(k)[len("PLUGIN_ENABLED_"):]
                 out[pid] = str(v).strip() == "1"
+        if not out and session != "general":
+            settings = MetadataRepository.get_all_settings("general")
+            for k, v in (settings or {}).items():
+                if str(k).startswith("PLUGIN_ENABLED_"):
+                    pid = str(k)[len("PLUGIN_ENABLED_"):]
+                    out[pid] = str(v).strip() == "1"
     except Exception:
         pass
     return out

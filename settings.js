@@ -274,12 +274,14 @@
     if (!base) return;
     const targets = SESSIONS.filter((s) => s !== origin);
     targets.forEach((s) => {
-      const data = Object.assign({}, base, { type: s });
       try {
+        const fd = new FormData();
+        fd.append('type', s);
+        fd.append('plugin_id', String(base.plugin_id || ''));
+        fd.append('enabled', String(base.enabled || '1'));
         window.__origFetchForPluginsViewer('/api/media/metadata/plugins/toggle', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data),
+          body: fd,
           credentials: 'same-origin',
         }).catch(() => {});
       } catch (_) {}
@@ -331,11 +333,21 @@
               cloned.json().then((data) => {
                 if (data && data.success) {
                   // B3: 모아보기 토글이면 나머지 세션에도 동일 적용
-                  let reqBody = null;
-                  try { reqBody = typeof options.body === 'string' ? JSON.parse(options.body) : (options.body || null); } catch (_) { reqBody = null; }
-                  if (reqBody && reqBody.plugin_id === 'bookoasis_plugins_viewer') {
-                    const origin = (reqBody.type && typeof reqBody.type === 'string' && SESSIONS.includes(reqBody.type)) ? reqBody.type : 'general';
-                    fanOutToggle(Object.assign({}, reqBody, { type: undefined }), origin);
+                  // 코어 toggle 라우트는 request.form만 읽음 → FormData로 fan-out
+                  let pluginId = null;
+                  let origin = 'general';
+                  let enabledVal = '1';
+                  try {
+                    const body = (typeof options.body === 'string') ? new URLSearchParams(options.body) : (options.body || null);
+                    if (body && typeof body.get === 'function') {
+                      pluginId = String(body.get('plugin_id') || '');
+                      const t = String(body.get('type') || 'general');
+                      if (SESSIONS.includes(t)) origin = t;
+                      enabledVal = String(body.get('enabled') || '1');
+                    }
+                  } catch (_) {}
+                  if (pluginId === 'bookoasis_plugins_viewer') {
+                    fanOutToggle({ plugin_id: pluginId, enabled: enabledVal }, origin);
                   }
                   refreshOnlyViewerTabs();
                 }
