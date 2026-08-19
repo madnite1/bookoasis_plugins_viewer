@@ -36,22 +36,58 @@ def _self_installed():
     return os.path.isdir(os.path.dirname(os.path.abspath(__file__)))
 
 
-def _load_general_config(force_refresh=False):
-    """모든 세션 DB(general, adult, audiobook, video)에 저장된 플러그인 설정을 표준 gateway를 통해 실시간으로 읽어 병합한다."""
-    merged = {}
+_ALL_SESSIONS = ("general", "adult", "audiobook", "video")
+
+
+def _db_config_for(session):
+    """특정 세션 DB의 PLUGIN_CONFIG_bookoasis_plugins_viewer 값을 dict로 읽는다. (없으면 {})"""
     try:
         from services.plugin_db_gateway import PluginDatabaseGateway
-        for session in ("general", "adult", "audiobook", "video"):
-            try:
-                gw = PluginDatabaseGateway(session)
-                data = gw.get_plugin_config(SELF_ID)
-                if isinstance(data, dict):
-                    merged.update(data)
-            except Exception:
-                pass
+        gw = PluginDatabaseGateway(session)
+        data = gw.get_plugin_config(SELF_ID)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _db_enabled_map(session):
+    """특정 세션 DB의 PLUGIN_ENABLED_<id> 활성 상태 맵을 읽는다. (키: plugin_id, 값: bool)"""
+    out = {}
+    try:
+        from repositories.metadata_repository import MetadataRepository
+        settings = MetadataRepository.get_all_settings(session)
+        for k, v in (settings or {}).items():
+            if str(k).startswith("PLUGIN_ENABLED_"):
+                pid = str(k)[len("PLUGIN_ENABLED_"):]
+                out[pid] = str(v).strip() == "1"
     except Exception:
         pass
-    return merged
+    return out
+
+
+def _load_config_for_session(session, force_refresh=False):
+    """해당 세션 DB의 설정을 읽고, 없으면 general DB로 폴백한다.
+
+    세션별 독립 저장(crares 의도)과 일반 기준 기본 설정(유메미루 요구)을 동시에 만족:
+      - 해당 세션 DB에 설정이 있으면 그 값을 사용 (세션별 독립)
+      - 없으면 general DB 값 사용 (일반 기준 폴백)
+      - general도 없으면 기본값(빈 dict = 전부 OFF, 개별 탭 유지)
+    """
+    session = str(session or "general").strip().lower()
+    if session not in _SESSION_LABELS:
+        session = "general"
+    data = _db_config_for(session)
+    if data:
+        return data
+    if session != "general":
+        return _db_config_for("general")
+    return {}
+
+
+def _load_general_config(force_refresh=False):
+    """하위 호환 래퍼: 세션 문맥이 있을 때 그 세션 설정, 없으면 general. (구 병합 로직 제거)"""
+    session = _current_request_session() or "general"
+    return _load_config_for_session(session, force_refresh=force_refresh)
 
 
 def _tab_sessions(tab):
@@ -133,6 +169,13 @@ class _DynamicPluginCategoryTab:
         if not _self_installed():
             return self._orig
         try:
+            # 모아보기 자신이 사용중지(enabled=0)되면 모든 오버라이드 해제 → 원본 탭 복원
+            enabled_map = _db_enabled_map(_current_request_session() or "general")
+            if enabled_map.get(SELF_ID, True) is False:
+                return self._orig
+            # 대상 플러그인이 삭제되었으면 원본 반환 (좀비 숨김 방지)
+            if not _plugin_installed(self.plugin_id):
+                return self._orig
             _discover_viewer_classes()
             config = _load_general_config()
             sessions = _tab_sessions(self._orig)
@@ -150,11 +193,30 @@ class _DynamicPluginCategoryTab:
         return self._orig
 
 
+def _plugin_installed(p_id):
+    """플러그인 폴더가 실제로 존재하는지 확인 (삭제된 플러그인 좀비 탭 제거용)."""
+    import os
+    try:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.isdir(os.path.join(base_dir, p_id))
+    except Exception:
+        return True
+
+
 def _discover_viewer_classes():
-    """category_tab 을 가진 (자신 제외) 설치 플러그인 탐색 및 동적 디스크립터 바인딩."""
+    """category_tab 을 가진 (자신 제외) 설치 플러그인 탐색 및 동적 디스크립터 바인딩.
+
+    - 폴더가 삭제된 플러그인은 제외 (좀비 탭 방지)
+    - 해당 세션 DB에서 PLUGIN_ENABLED_<id> != 1 인 플러그인은 제외 (사용중지 미반영 방지)
+    """
     viewers = []
     try:
         from plugins.metadata.base import BaseMetadataProvider
+        enabled_map = {}
+        try:
+            enabled_map = _db_enabled_map(_current_request_session() or "general")
+        except Exception:
+            pass
         seen = set()
         for target_class in BaseMetadataProvider.__subclasses__():
             if not target_class:
@@ -163,6 +225,14 @@ def _discover_viewer_classes():
             if not p_id or p_id == SELF_ID or p_id in seen:
                 continue
             seen.add(p_id)
+
+            # A4: 폴더 삭제된 플러그인 제외 (좀비 탭)
+            if not _plugin_installed(p_id):
+                continue
+
+            # A2: 사용중지(enabled=0) 플러그인 제외
+            if p_id in enabled_map and not enabled_map[p_id]:
+                continue
 
             orig_tab = None
             desc = None
@@ -196,8 +266,16 @@ def _discover_viewer_classes():
 
 
 def _apply_session_overrides(force_refresh_config=False):
-    """모든 타겟 뷰어 클래스 탐색 및 오버라이드 바인딩 적용."""
-    _discover_viewer_classes()
+    """모든 타겟 뷰어 클래스 탐색 및 오버라이드 바인딩 적용.
+
+    discover가 자체적으로 enabled/설치 상태를 걸러내고, 각 타겟의 category_tab을
+    _DynamicPluginCategoryTab 디스크립터로 감싸므로 코어가 속성을 읽는 시점에
+    실시간으로 숨김/복원이 결정된다. _ORIG_TABS에는 원본 tab dict를 보관한다.
+    """
+    try:
+        _discover_viewer_classes()
+    except Exception:
+        pass
 
 
 def _read_plugin_version(p_id):
@@ -324,8 +402,10 @@ class BookOasisPluginsViewerMetadataProvider(BaseMetadataProvider):
     def get_dashboard_data(self, db_type, limit=10):
         """현재 세션(db_type)의 통합 뷰어 탭 목록 반환."""
         _apply_session_overrides(force_refresh_config=True)
-        config = _load_general_config()
         session = str(db_type or "general").strip().lower()
+        if session not in _SESSION_LABELS:
+            session = "general"
+        config = _load_config_for_session(session, force_refresh=True)
 
         tabs = []
         for p_id, p_name, sessions, _cls in _discover_viewer_classes():

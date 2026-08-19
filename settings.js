@@ -250,6 +250,60 @@
     } catch (_) {}
   }
 
+  // B2/B3: 저장/토글 성공 시 같은 페이로드로 나머지 세션 DB에 fan-out 저장
+  // origin = 원본 요청이 저장된 세션 (그 세션은 코어가 이미 저장했으므로 제외)
+  function fanOutSaveConfig(payload, origin) {
+    const base = (typeof payload === 'string') ? null : payload;
+    if (!base) return;
+    const targets = SESSIONS.filter((s) => s !== origin);
+    targets.forEach((s) => {
+      const data = Object.assign({}, base, { type: s });
+      try {
+        window.__origFetchForPluginsViewer('/api/media/metadata/plugins/save-config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+          credentials: 'same-origin',
+        }).catch(() => {});
+      } catch (_) {}
+    });
+  }
+
+  function fanOutToggle(payload, origin) {
+    const base = (typeof payload === 'string') ? null : payload;
+    if (!base) return;
+    const targets = SESSIONS.filter((s) => s !== origin);
+    targets.forEach((s) => {
+      const data = Object.assign({}, base, { type: s });
+      try {
+        window.__origFetchForPluginsViewer('/api/media/metadata/plugins/toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+          credentials: 'same-origin',
+        }).catch(() => {});
+      } catch (_) {}
+    });
+  }
+
+  // form 데이터에서 payload 복원 (fan-out 재전송용)
+  function buildPayloadFromForm() {
+    const data = {};
+    const form = root.closest('form') || document.querySelector('form[data-plugin-id]');
+    if (!form) return data;
+    const inputs = form.querySelectorAll('input, select, textarea');
+    inputs.forEach((inp) => {
+      if (!inp.name) return;
+      if (inp.type === 'checkbox') data[inp.name] = !!inp.checked;
+      else if (inp.type === 'radio') {
+        if (inp.checked) data[inp.name] = String(inp.value ?? '');
+      } else {
+        data[inp.name] = String(inp.value ?? '').trim();
+      }
+    });
+    return data;
+  }
+
   function wrapSaveConfigApi() {
     try {
       if (!window.__origFetchForPluginsViewer) {
@@ -262,6 +316,27 @@
               const cloned = response.clone();
               cloned.json().then((data) => {
                 if (data && data.success) {
+                  // B2: 모아보기 설정이면 나머지 세션 DB에도 동일 저장
+                  let reqBody = null;
+                  try { reqBody = typeof options.body === 'string' ? JSON.parse(options.body) : (options.body || null); } catch (_) { reqBody = null; }
+                  if (reqBody && reqBody.plugin_id === 'bookoasis_plugins_viewer') {
+                    const origin = (reqBody.type && typeof reqBody.type === 'string' && SESSIONS.includes(reqBody.type)) ? reqBody.type : 'general';
+                    fanOutSaveConfig(Object.assign({}, reqBody, { type: undefined }), origin);
+                  }
+                  refreshOnlyViewerTabs();
+                }
+              }).catch(() => {});
+            } else if (url && url.includes('/api/media/metadata/plugins/toggle') && options && options.method === 'POST') {
+              const cloned = response.clone();
+              cloned.json().then((data) => {
+                if (data && data.success) {
+                  // B3: 모아보기 토글이면 나머지 세션에도 동일 적용
+                  let reqBody = null;
+                  try { reqBody = typeof options.body === 'string' ? JSON.parse(options.body) : (options.body || null); } catch (_) { reqBody = null; }
+                  if (reqBody && reqBody.plugin_id === 'bookoasis_plugins_viewer') {
+                    const origin = (reqBody.type && typeof reqBody.type === 'string' && SESSIONS.includes(reqBody.type)) ? reqBody.type : 'general';
+                    fanOutToggle(Object.assign({}, reqBody, { type: undefined }), origin);
+                  }
                   refreshOnlyViewerTabs();
                 }
               }).catch(() => {});
@@ -276,7 +351,10 @@
   async function load() {
     wrapSaveConfigApi();
     try {
-      const res = await fetch(`/api/media/dashboard/widgets/${encodeURIComponent(pluginId)}/data?type=general`, {
+      // B4: 설정 로드도 현재 열린 라이브러리 세션 기준 (general 하드코딩 제거)
+      const currentSession = (window.currentLibraryType && SESSIONS.includes(window.currentLibraryType))
+        ? window.currentLibraryType : 'general';
+      const res = await fetch(`/api/media/dashboard/widgets/${encodeURIComponent(pluginId)}/data?type=${encodeURIComponent(currentSession)}`, {
         credentials: 'same-origin',
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
