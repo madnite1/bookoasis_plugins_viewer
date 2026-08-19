@@ -197,8 +197,9 @@ class _DynamicPluginCategoryTab:
                 if req_session in sessions and _is_on(config.get(f"SHOW_{self.plugin_id}__{req_session}", False)):
                     return None
             else:
-                picked = _unified_sessions_for(config, self.plugin_id, sessions)
-                if picked and len(picked) == len(sessions):
+                # 요청 밖(비요청 컨텍스트)에서는 general 설정을 기준으로 판단.
+                # general에 체크되어 있으면 사이드바/카탈로그 등 모든 경로에서 숨긴다.
+                if "general" in sessions and _is_on(config.get(f"SHOW_{self.plugin_id}__general", False)):
                     return None
         except Exception:
             pass
@@ -215,6 +216,52 @@ def _plugin_installed(p_id):
         return True
 
 
+def _preload_plugin_modules():
+    """코어 category-plugins API의 lazy import 경합 회피.
+
+    코어는 플러그인 모듈을 첫 요청 시점에 lazy import하므로
+    BaseMetadataProvider.__subclasses__()는 import 순서/시점에 따라 불완전할 수 있다.
+    뷰어의 디스크립터 바인딩이 항상 전체 설치 플러그인을 대상으로 하도록
+    plugins/metadata 디렉터리의 모든 플러그인 모듈을 미리 import한다.
+    """
+    import os
+    import importlib
+    try:
+        plugins_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if not os.path.isdir(plugins_dir):
+            return
+        for entry in sorted(os.listdir(plugins_dir)):
+            if entry == SELF_ID or entry == "base.py" or entry.startswith("__") or entry.startswith("_"):
+                continue
+            full = os.path.join(plugins_dir, entry)
+            if not (entry.endswith(".py") or os.path.isdir(full)):
+                continue
+            base = entry[:-3] if entry.endswith(".py") else entry
+            for candidate in (
+                f"plugins.metadata.{base}",
+                f"plugins.metadata.{base}.{base}",
+                f"plugins.metadata.{base}.provider",
+            ):
+                try:
+                    importlib.import_module(candidate)
+                    break
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+
+# 모듈 import 시점(코어가 첫 플러그인 로드를 위해 이 모듈을 import하는 순간)에
+# 전체 플러그인 모듈을 미리 import하고 디스크립터 바인딩까지 완료한다.
+# 이렇게 해야 코어 category-plugins API가 lazy import 경합 없이 처음부터
+# 디스크립터 바인딩된 클래스들을 반환하므로, 모아보기 화면에 들어가기 전(바깥 화면)에도
+# 개별 탭 숨김이 첫 요청부터 적용된다.
+try:
+    _preload_plugin_modules()
+except Exception:
+    pass
+
+
 def _discover_viewer_classes():
     """category_tab 을 가진 (자신 제외) 설치 플러그인 탐색 및 동적 디스크립터 바인딩.
 
@@ -223,6 +270,9 @@ def _discover_viewer_classes():
     """
     viewers = []
     try:
+        # lazy import 경합 회피: 전체 플러그인 모듈을 먼저 import해야
+        # BaseMetadataProvider.__subclasses__()가 완전한 목록을 반환한다.
+        _preload_plugin_modules()
         from plugins.metadata.base import BaseMetadataProvider
         enabled_map = {}
         try:
@@ -288,6 +338,18 @@ def _apply_session_overrides(force_refresh_config=False):
         _discover_viewer_classes()
     except Exception:
         pass
+
+
+# 모듈 import 완료 시점(코어가 첫 플러그인 로드를 위해 이 모듈을 import하는 순간)에
+# 전체 플러그인 모듈을 preload한 뒤 디스크립터 바인딩까지 완료한다.
+# 그래야 코어 category-plugins API가 lazy import 경합 없이 처음부터 디스크립터
+# 바인딩된 클래스들을 반환하므로, 모아보기 화면에 들어가기 전(바깥 화면)에도
+# 개별 탭 숨김이 첫 요청부터 적용된다. (재귀 가드는 _self_installed + 이미 바인딩된
+# 클래스는 건너뛰는 discover 로직이 담당)
+try:
+    _apply_session_overrides()
+except Exception:
+    pass
 
 
 def _read_plugin_version(p_id):

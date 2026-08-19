@@ -191,6 +191,8 @@
 
   window.reloadBookOasisPluginsViewerTabs = reloadViewerTabs;
   window.addEventListener('bookoasis_plugins_viewer:config_updated', reloadViewerTabs);
+  // 세션 전환/사이드바 재렌더링 후에도 현재 세션 기준으로 개별 탭 숨김/복원 재적용
+  window.addEventListener('library:categories-rendered', reloadViewerTabs);
   // 플러그인 매니저에서 설치/삭제/활성/비활성/업데이트 성공 시 탭 목록 재조회
   window.addEventListener('plugin_manager:plugins_changed', reloadViewerTabs);
 

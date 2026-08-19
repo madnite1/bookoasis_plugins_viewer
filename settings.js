@@ -241,7 +241,54 @@
     });
   }
 
+  function currentType() {
+    return document.documentElement.getAttribute('data-library-type') || 'general';
+  }
+
+  // 설정 페이지(모아보기 화면 밖)에서도 사이드바 탭 숨김/복원을 즉시 적용.
+  // script.js는 모아보기 화면 진입 시에만 로드되므로, 여기(설정 페이지 상시 로드)에서
+  // 같은 로직을 직접 수행해 저장 직후 바깥 화면에서도 개별 탭이 바로 정리되게 한다.
+  function applySidebarCleanup() {
+    try {
+      // 저장된 hidden input/체크박스에서 현재 세션의 체크 목록 수집
+      const type = SESSIONS.includes(currentType()) ? currentType() : 'general';
+      const checkedIds = new Set();
+      root.querySelectorAll(`input[name^="SHOW_"][name$="__${type}"]`).forEach((cb) => {
+        if (cb.checked) checkedIds.add(cb.name.slice(5, cb.name.indexOf('__')));
+      });
+      checkedIds.delete('bookoasis_plugins_viewer');
+
+      // 1. 체크된 플러그인의 개별 사이드바 탭 숨김
+      checkedIds.forEach((pid) => {
+        if (!pid) return;
+        const selectors = [
+          `[data-plugin-id="${CSS.escape(pid)}"]`,
+          `[data-tab-id="${CSS.escape(pid)}"]`,
+          `a[href*="/plugins/${CSS.escape(pid)}"]`,
+          `a[href*="/category/${CSS.escape(pid)}"]`,
+        ];
+        selectors.forEach((sel) => {
+          document.querySelectorAll(sel).forEach((el) => {
+            if (!el.closest('[data-uf-root]') && !el.closest('[data-pv-role]')) {
+              el.style.display = 'none';
+            }
+          });
+        });
+      });
+
+      // 2. 체크 해제된 플러그인의 사이드바 탭 복원
+      document.querySelectorAll('[data-role="sidebar-category-dynamic"], [data-plugin-id], [data-tab-id]').forEach((el) => {
+        if (el.closest('[data-uf-root]') || el.closest('[data-pv-role]')) return;
+        const pid = el.dataset.pluginId || el.dataset.tabId || (el.dataset.id && el.dataset.id.startsWith('plugin_') ? el.dataset.id.replace('plugin_', '') : null);
+        if (pid && !checkedIds.has(pid) && el.style.display === 'none') {
+          el.style.display = '';
+        }
+      });
+    } catch (_) {}
+  }
+
   function refreshOnlyViewerTabs() {
+    applySidebarCleanup();
     try {
       window.dispatchEvent(new CustomEvent('bookoasis_plugins_viewer:config_updated'));
       if (typeof window.reloadBookOasisPluginsViewerTabs === 'function') {
