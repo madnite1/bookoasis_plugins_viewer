@@ -297,105 +297,38 @@
     } catch (_) {}
   }
 
-  // B2/B3: 저장/토글 성공 시 같은 페이로드로 나머지 세션 DB에 fan-out 저장
-  // origin = 원본 요청이 저장된 세션 (그 세션은 코어가 이미 저장했으므로 제외)
-  function fanOutSaveConfig(payload, origin) {
-    const base = (typeof payload === 'string') ? null : payload;
-    if (!base) return;
-    const targets = SESSIONS.filter((s) => s !== origin);
-    targets.forEach((s) => {
-      const data = Object.assign({}, base, { type: s });
-      try {
-        window.__origFetchForPluginsViewer('/api/media/metadata/plugins/save-config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data),
-          credentials: 'same-origin',
-        }).catch(() => {});
-      } catch (_) {}
-    });
-  }
-
-  function fanOutToggle(payload, origin) {
-    const base = (typeof payload === 'string') ? null : payload;
-    if (!base) return;
-    const targets = SESSIONS.filter((s) => s !== origin);
-    targets.forEach((s) => {
-      try {
-        const fd = new FormData();
-        fd.append('type', s);
-        fd.append('plugin_id', String(base.plugin_id || ''));
-        fd.append('enabled', String(base.enabled || '1'));
-        window.__origFetchForPluginsViewer('/api/media/metadata/plugins/toggle', {
-          method: 'POST',
-          body: fd,
-          credentials: 'same-origin',
-        }).catch(() => {});
-      } catch (_) {}
-    });
-  }
-
-  // form 데이터에서 payload 복원 (fan-out 재전송용)
-  function buildPayloadFromForm() {
-    const data = {};
-    const form = root.closest('form') || document.querySelector('form[data-plugin-id]');
-    if (!form) return data;
-    const inputs = form.querySelectorAll('input, select, textarea');
-    inputs.forEach((inp) => {
-      if (!inp.name) return;
-      if (inp.type === 'checkbox') data[inp.name] = !!inp.checked;
-      else if (inp.type === 'radio') {
-        if (inp.checked) data[inp.name] = String(inp.value ?? '');
-      } else {
-        data[inp.name] = String(inp.value ?? '').trim();
-      }
-    });
-    return data;
-  }
-
+  // 저장/토글 후 사이드바 및 탭 갱신
   function wrapSaveConfigApi() {
     try {
       if (!window.__origFetchForPluginsViewer) {
         window.__origFetchForPluginsViewer = window.fetch;
         window.fetch = async function (resource, options) {
+          const url = typeof resource === 'string' ? resource : (resource && resource.url ? resource.url : '');
+
+          // 모아보기 설정 저장 요청 시 자체 SQLite save-config API로 가로채기
+          if (url && url.includes('/api/media/metadata/plugins/save-config') && options && options.method === 'POST') {
+            let reqBody = null;
+            try { reqBody = typeof options.body === 'string' ? JSON.parse(options.body) : (options.body || null); } catch (_) { reqBody = null; }
+            if (reqBody && reqBody.plugin_id === 'bookoasis_plugins_viewer') {
+              try {
+                const res = await window.__origFetchForPluginsViewer('/api/media/dashboard/widgets/bookoasis_plugins_viewer/save-config', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(reqBody),
+                  credentials: 'same-origin',
+                });
+                refreshOnlyViewerTabs();
+                return res;
+              } catch (_) {}
+            }
+          }
+
           const response = await window.__origFetchForPluginsViewer.apply(this, arguments);
           try {
-            const url = typeof resource === 'string' ? resource : (resource && resource.url ? resource.url : '');
-            if (url && url.includes('/api/media/metadata/plugins/save-config') && options && options.method === 'POST') {
+            if (url && (url.includes('/api/media/metadata/plugins/save-config') || url.includes('/api/media/metadata/plugins/toggle')) && options && options.method === 'POST') {
               const cloned = response.clone();
               cloned.json().then((data) => {
                 if (data && data.success) {
-                  // B2: 모아보기 설정이면 나머지 세션 DB에도 동일 저장
-                  let reqBody = null;
-                  try { reqBody = typeof options.body === 'string' ? JSON.parse(options.body) : (options.body || null); } catch (_) { reqBody = null; }
-                  if (reqBody && reqBody.plugin_id === 'bookoasis_plugins_viewer') {
-                    const origin = (reqBody.type && typeof reqBody.type === 'string' && SESSIONS.includes(reqBody.type)) ? reqBody.type : 'general';
-                    fanOutSaveConfig(Object.assign({}, reqBody, { type: undefined }), origin);
-                  }
-                  refreshOnlyViewerTabs();
-                }
-              }).catch(() => {});
-            } else if (url && url.includes('/api/media/metadata/plugins/toggle') && options && options.method === 'POST') {
-              const cloned = response.clone();
-              cloned.json().then((data) => {
-                if (data && data.success) {
-                  // B3: 모아보기 토글이면 나머지 세션에도 동일 적용
-                  // 코어 toggle 라우트는 request.form만 읽음 → FormData로 fan-out
-                  let pluginId = null;
-                  let origin = 'general';
-                  let enabledVal = '1';
-                  try {
-                    const body = (typeof options.body === 'string') ? new URLSearchParams(options.body) : (options.body || null);
-                    if (body && typeof body.get === 'function') {
-                      pluginId = String(body.get('plugin_id') || '');
-                      const t = String(body.get('type') || 'general');
-                      if (SESSIONS.includes(t)) origin = t;
-                      enabledVal = String(body.get('enabled') || '1');
-                    }
-                  } catch (_) {}
-                  if (pluginId === 'bookoasis_plugins_viewer') {
-                    fanOutToggle({ plugin_id: pluginId, enabled: enabledVal }, origin);
-                  }
                   refreshOnlyViewerTabs();
                 }
               }).catch(() => {});
@@ -407,8 +340,83 @@
     } catch (_) {}
   }
 
+  function collectSettingsData() {
+    const data = {};
+    // 체크박스 수집
+    grid.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+      if (cb.name) data[cb.name] = cb.checked ? 'True' : 'False';
+    });
+    // TAB_ORDER hidden inputs 수집
+    lanesEl.querySelectorAll('input[type="hidden"]').forEach((inp) => {
+      if (inp.name) data[inp.name] = String(inp.value || '');
+    });
+    return data;
+  }
+
+  async function saveViewerSettings(form, submitBtn) {
+    const origHtml = submitBtn ? submitBtn.innerHTML : '';
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 저장 중...';
+    }
+
+    try {
+      const payload = collectSettingsData();
+      const res = await fetch('/api/media/dashboard/widgets/bookoasis_plugins_viewer/save-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          plugin_id: 'bookoasis_plugins_viewer',
+          settings: payload,
+          config: payload
+        })
+      });
+      const data = await res.json();
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = origHtml;
+      }
+      if (data.success) {
+        refreshOnlyViewerTabs();
+        if (typeof window.showToast === 'function') {
+          window.showToast(data.message || '모아보기 설정이 저장되었습니다.', 'success');
+        } else {
+          alert(data.message || '모아보기 설정이 저장되었습니다.');
+        }
+      } else {
+        if (typeof window.showToast === 'function') {
+          window.showToast(data.error || '설정 저장 실패', 'error');
+        } else {
+          alert(data.error || '설정 저장 실패');
+        }
+      }
+    } catch (err) {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = origHtml;
+      }
+      if (typeof window.showToast === 'function') {
+        window.showToast('통신 오류: ' + err.message, 'error');
+      } else {
+        alert('통신 오류: ' + err.message);
+      }
+    }
+  }
+
   async function load() {
     wrapSaveConfigApi();
+    
+    // 코어 폼 submit 가로채기 (capture 단계)
+    const form = root.closest('form.plugin-config-form') || root.closest('form');
+    if (form) {
+      form.addEventListener('submit', function (e) {
+        const submitBtn = form.querySelector('button[type="submit"]');
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        saveViewerSettings(form, submitBtn);
+      }, true); // capture mode
+    }
+
     try {
       // B4: 설정 로드도 현재 열린 라이브러리 세션 기준 (general 하드코딩 제거)
       const currentSession = (window.currentLibraryType && SESSIONS.includes(window.currentLibraryType))

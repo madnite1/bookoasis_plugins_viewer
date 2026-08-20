@@ -1,20 +1,7 @@
-# -*- coding: utf-8 -*-
-"""
-BookOasis 플러그인 뷰어 (Plugins Viewer) 플러그인.
-
-설치된 카테고리 레벨 플러그인들(예: 11t / HYB / KH / MangaDex / TK / Wolf Viewer)의
-카테고리 뷰를 하나의 화면에서 각 플러그인 이름의 탭으로 구분해 통합 표시한다.
-
-동작 원리:
-  - 통합 뷰어 자체는 모든 세션(sessions: all)에 노출된다.
-  - 설정에서 뷰어별·세션별 체크박스(SHOW_<plugin_id>__<session>)로
-    "이 보관함의 통합 뷰어에 표시"를 선택한다 (기본: 꺼짐 = 기존 개별 탭 유지).
-  - 하나라도 통합 표시로 선택된 플러그인은 category_tab 을 런타임 디스크립터로
-    오버라이드하여 사이드바 개별 탭에서 실시간으로 숨긴다.
-  - 프론트엔드는 get_dashboard_data 로 현재 세션의 탭 목록을 받고,
-    각 뷰어의 UI 번들은 /api/media/plugins/<id>/ui 로 조회해 직접 마운트한다.
-"""
+import os
 import json
+import sqlite3
+import threading
 
 from plugins.metadata.base import BaseMetadataProvider
 
@@ -29,34 +16,172 @@ _SESSION_LABELS = {
 # 런타임 category_tab 오버라이드 원본 보관: {plugin_id: 원본 category_tab dict}
 _ORIG_TABS = {}
 
+# viewer.db(sqlite) 동시 접근 직렬화
+_VIEWER_DB_LOCK = threading.Lock()
+# 코어 DB 설정 → viewer.db 1회 마이그레이션 잠금
+_VIEWER_MIGRATION_LOCK = threading.Lock()
+_VIEWER_MIGRATION_DONE = False
+
+# 자체 save-config 라우트 1회 등록 보장
+_VIEWER_ROUTES_LOCK = threading.Lock()
+_VIEWER_ROUTES_REGISTERED = False
+
+
+def _get_data_dir():
+    """플러그인 영속 데이터 디렉터리 (../../data/bookoasis_plugins_viewer/)"""
+    plugin_dir = os.path.dirname(os.path.abspath(__file__))
+    data_dir = os.path.normpath(os.path.join(plugin_dir, "..", "..", "data", SELF_ID))
+    try:
+        os.makedirs(data_dir, exist_ok=True)
+    except Exception:
+        pass
+    return data_dir
+
+
+def _get_viewer_db_path():
+    """viewer.db SQLite 경로"""
+    return os.path.join(_get_data_dir(), "viewer.db")
+
+
+def _init_viewer_db():
+    """SQLite 테이블 생성"""
+    db_path = _get_viewer_db_path()
+    with _VIEWER_DB_LOCK:
+        try:
+            conn = sqlite3.connect(db_path, timeout=10)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )"""
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+
+def _run_migration_once():
+    """최초 1회 마이그레이션: 코어 DB 설정 → viewer.db.settings"""
+    global _VIEWER_MIGRATION_DONE
+    with _VIEWER_MIGRATION_LOCK:
+        if _VIEWER_MIGRATION_DONE:
+            return
+        data_dir = _get_data_dir()
+        flag = os.path.join(data_dir, ".migrated")
+        if os.path.exists(flag):
+            _VIEWER_MIGRATION_DONE = True
+            return
+
+        _init_viewer_db()
+        db_path = _get_viewer_db_path()
+
+        try:
+            from services.plugin_db_gateway import PluginDatabaseGateway
+            core_settings = {}
+            for s in ("general", "adult", "audiobook", "video"):
+                try:
+                    gw = PluginDatabaseGateway(s)
+                    cfg = gw.get_plugin_config(SELF_ID)
+                    if isinstance(cfg, dict):
+                        for k, v in cfg.items():
+                            if k not in core_settings or v:
+                                core_settings[k] = v
+                except Exception:
+                    continue
+
+            if core_settings:
+                with _VIEWER_DB_LOCK:
+                    conn = sqlite3.connect(db_path, timeout=10)
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    for k, v in core_settings.items():
+                        conn.execute(
+                            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                            (str(k), str(v) if not isinstance(v, (dict, list)) else json.dumps(v))
+                        )
+                    conn.commit()
+                    conn.close()
+
+            with open(flag, "w", encoding="utf-8") as f:
+                f.write("done")
+        except Exception:
+            pass
+        _VIEWER_MIGRATION_DONE = True
+
+
+# 초기화 및 마이그레이션 자동 실행
+try:
+    _init_viewer_db()
+    _run_migration_once()
+except Exception:
+    pass
+
+
+def _get_viewer_setting(key, default=None):
+    """viewer.db에서 단일 설정 읽기"""
+    db_path = _get_viewer_db_path()
+    with _VIEWER_DB_LOCK:
+        try:
+            conn = sqlite3.connect(db_path, timeout=10)
+            cur = conn.cursor()
+            cur.execute("SELECT value FROM settings WHERE key = ?", (str(key),))
+            row = cur.fetchone()
+            conn.close()
+            if row is not None:
+                return row[0]
+        except Exception:
+            pass
+    return default
+
+
+def _get_all_viewer_settings():
+    """viewer.db의 모든 설정을 dict로 반환"""
+    db_path = _get_viewer_db_path()
+    res = {}
+    with _VIEWER_DB_LOCK:
+        try:
+            conn = sqlite3.connect(db_path, timeout=10)
+            cur = conn.cursor()
+            cur.execute("SELECT key, value FROM settings")
+            for k, v in cur.fetchall():
+                res[k] = v
+            conn.close()
+        except Exception:
+            pass
+    return res
+
+
+def _set_viewer_settings(settings_dict):
+    """viewer.db에 설정 여러 개 원자적 저장"""
+    if not isinstance(settings_dict, dict):
+        return
+    db_path = _get_viewer_db_path()
+    with _VIEWER_DB_LOCK:
+        try:
+            conn = sqlite3.connect(db_path, timeout=10)
+            conn.execute("PRAGMA journal_mode=WAL")
+            for k, v in settings_dict.items():
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                    (str(k), str(v) if not isinstance(v, (dict, list)) else json.dumps(v))
+                )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
 
 def _self_installed():
     """플러그인 모아보기 자신이 아직 설치되어 있는지 확인 (삭제 시 자가 복구용)."""
-    import os
     return os.path.isdir(os.path.dirname(os.path.abspath(__file__)))
 
 
 _ALL_SESSIONS = ("general", "adult", "audiobook", "video")
 
 
-def _db_config_for(session):
-    """특정 세션 DB의 PLUGIN_CONFIG_bookoasis_plugins_viewer 값을 dict로 읽는다. (없으면 {})"""
-    try:
-        from services.plugin_db_gateway import PluginDatabaseGateway
-        gw = PluginDatabaseGateway(session)
-        data = gw.get_plugin_config(SELF_ID)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
 def _db_enabled_map(session):
-    """특정 세션 DB의 PLUGIN_ENABLED_<id> 활성 상태 맵을 읽는다. (키: plugin_id, 값: bool)
-
-    enabled 토글은 코어가 항상 'general' DB에만 저장한다 (plugin_service.toggle_plugin_enabled
-    호출부가 currentLibraryType을 넘기지만, 실제 저장은 general 세션 DB의 settings 테이블).
-    → 세션 DB에 PLUGIN_ENABLED_ 키가 하나도 없으면 general DB로 폴백해 읽는다.
-    """
+    """특정 세션 DB의 PLUGIN_ENABLED_<id> 활성 상태 맵을 읽는다. (키: plugin_id, 값: bool)"""
     session = str(session or "general").strip().lower()
     out = {}
     try:
@@ -77,29 +202,13 @@ def _db_enabled_map(session):
     return out
 
 
-def _load_config_for_session(session, force_refresh=False):
-    """해당 세션 DB의 설정을 읽고, 없으면 general DB로 폴백한다.
-
-    세션별 독립 저장(crares 의도)과 일반 기준 기본 설정(유메미루 요구)을 동시에 만족:
-      - 해당 세션 DB에 설정이 있으면 그 값을 사용 (세션별 독립)
-      - 없으면 general DB 값 사용 (일반 기준 폴백)
-      - general도 없으면 기본값(빈 dict = 전부 OFF, 개별 탭 유지)
-    """
-    session = str(session or "general").strip().lower()
-    if session not in _SESSION_LABELS:
-        session = "general"
-    data = _db_config_for(session)
-    if data:
-        return data
-    if session != "general":
-        return _db_config_for("general")
-    return {}
+def _load_config_for_session(session=None, force_refresh=False):
+    """viewer.db에서 전체 설정 반환 (개별 SQLite 기반이므로 세션 무관 글로벌 일관성 유지)"""
+    return _get_all_viewer_settings()
 
 
 def _load_general_config(force_refresh=False):
-    """하위 호환 래퍼: 세션 문맥이 있을 때 그 세션 설정, 없으면 general. (구 병합 로직 제거)"""
-    session = _current_request_session() or "general"
-    return _load_config_for_session(session, force_refresh=force_refresh)
+    return _load_config_for_session()
 
 
 def _tab_sessions(tab):
@@ -471,10 +580,61 @@ class BookOasisPluginsViewerMetadataProvider(BaseMetadataProvider):
         return []
 
     def apply(self, db_type, book_id, item_data):
+        if not isinstance(item_data, dict):
+            return False, "유효하지 않은 요청 데이터입니다."
+        action = str(item_data.get("action", "")).strip().lower()
+        if action == "save_config":
+            settings_map = item_data.get("settings")
+            if isinstance(settings_map, dict):
+                _set_viewer_settings(settings_map)
+                _apply_session_overrides(force_refresh_config=True)
+                return True, "설정이 성공적으로 저장되었습니다."
+            return False, "저장할 설정 데이터가 올바르지 않습니다."
         return False, "통합 뷰어는 메타데이터 적용 기능을 제공하지 않습니다."
+
+    def _ensure_routes(self):
+        """save-config 자체 라우트 1회 등록"""
+        global _VIEWER_ROUTES_REGISTERED
+        with _VIEWER_ROUTES_LOCK:
+            if _VIEWER_ROUTES_REGISTERED:
+                return
+            try:
+                from flask import current_app, request, jsonify
+                from werkzeug.routing import Rule
+                app = current_app._get_current_object()
+                endpoint = "bookoasis_plugins_viewer_save_config"
+
+                def _save_config_handler():
+                    try:
+                        data = request.get_json(silent=True) or {}
+                        # 1. data.get("config") (코어 saveMetadataPluginConfig 페이로드 형태)
+                        settings_data = data.get("config")
+                        # 2. data.get("settings") (자체 API 페이로드 형태)
+                        if not isinstance(settings_data, dict):
+                            settings_data = data.get("settings")
+                        # 3. flat dict fallback
+                        if not isinstance(settings_data, dict):
+                            settings_data = {k: v for k, v in data.items() if k not in ("plugin_id", "type", "config", "settings")}
+
+                        _set_viewer_settings(settings_data)
+                        _apply_session_overrides(force_refresh_config=True)
+                        return jsonify({"success": True, "message": "설정이 성공적으로 저장되었습니다."})
+                    except Exception as e:
+                        return jsonify({"success": False, "error": f"설정 저장 실패: {str(e)}"})
+
+                if endpoint not in app.view_functions:
+                    app.url_map.add(Rule(
+                        "/api/media/dashboard/widgets/bookoasis_plugins_viewer/save-config",
+                        endpoint=endpoint, methods=["POST"],
+                    ))
+                    app.view_functions[endpoint] = _save_config_handler
+                _VIEWER_ROUTES_REGISTERED = True
+            except Exception:
+                pass
 
     def get_dashboard_data(self, db_type, limit=10):
         """현재 세션(db_type)의 통합 뷰어 탭 목록 반환."""
+        self._ensure_routes()
         _apply_session_overrides(force_refresh_config=True)
         session = str(db_type or "general").strip().lower()
         if session not in _SESSION_LABELS:
@@ -515,8 +675,11 @@ class BookOasisPluginsViewerMetadataProvider(BaseMetadataProvider):
 BookOasisPluginsViewerMetadataProvider.config_schema = _DynamicConfigSchema()
 BookOasisPluginsViewerMetadataProvider.category_tab = _DynamicCategoryTab()
 
-# 모듈 로드 즉시 오버라이드 적용 (모든 대상 플러그인 category_tab을 실시간 디스크립터로 즉시 감쌈)
+# 모듈 로드 즉시 오버라이드 적용 및 라우트 등록
 try:
     _apply_session_overrides(force_refresh_config=True)
+    BookOasisPluginsViewerMetadataProvider()._ensure_routes()
 except Exception:
     pass
+
+
